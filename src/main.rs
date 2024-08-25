@@ -1,9 +1,19 @@
-use std::io::Write;
+use rand::Rng;
+use std::{
+    collections::HashMap,
+    io::{stdin, Write},
+};
+
+struct Drop {
+    percentage: f64,
+    count: u64,
+}
 
 struct Input {
     monthly_compound: f64,
-    yearly_avg: f64,
+    yearly_roi: f64,
     deadline: u64,
+    drops: Vec<Drop>,
 }
 
 struct Stats {
@@ -15,15 +25,29 @@ struct Stats {
 }
 
 fn calc_stats(input: &Input) -> Stats {
-    let monthly_avg = input.yearly_avg / 12.0;
+    let monthly_avg = input.yearly_roi / 12.0;
     let months = input.deadline * 12;
     let mut monthly_buy: Vec<f64> = vec![];
     let mut pnl: f64 = 0.0;
+    let mut drop_months: HashMap<u64, &Drop> = HashMap::new();
 
-    for _ in 0..months {
+    for drop in input.drops.iter() {
+        let mut rng = rand::thread_rng();
+
+        for _ in 0..drop.count {
+            let rng_month = rng.gen_range(0..months);
+            drop_months.insert(rng_month, drop);
+        }
+    }
+
+    for i in 0..months {
         monthly_buy.push(input.monthly_compound);
         for m in &mut monthly_buy {
-            *m += *m * monthly_avg;
+            if drop_months.contains_key(&i) {
+                *m -= *m * drop_months.get(&i).unwrap().percentage;
+            } else {
+                *m += *m * monthly_avg;
+            }
         }
     }
 
@@ -44,47 +68,87 @@ fn calc_stats(input: &Input) -> Stats {
         investments,
     }
 }
-
-fn parse_args(args: &[String]) -> Option<Input> {
-    let monthly_compound: f64 = match args.get(1).unwrap().parse() {
-        Ok(res) => res,
-        Err(err) => {
-            eprintln!("ERROR: {err}");
-            return None;
-        }
+fn parse_args() -> Input {
+    let monthly_compound = read_float("How much money do you expect to invest each month?");
+    let yearly_roi =
+        read_float("What is the yearly return on investment of the stock? (e.g., 0.04)");
+    let deadline = read_unsigned_int("How many years do you plan to compound this investment?");
+    let drops = if confirm("Do you want to add drops in the calculation? y/n") {
+        parse_drops()
+    } else {
+        vec![]
     };
 
-    let yearly_avg: f64 = match args.get(2).unwrap().parse() {
-        Ok(res) => res,
-        Err(err) => {
-            eprintln!("ERROR: {err}");
-            return None;
-        }
-    };
-
-    let deadline: u64 = match args.get(3).unwrap().parse() {
-        Ok(res) => res,
-        Err(err) => {
-            eprintln!("ERROR: {err}");
-            return None;
-        }
-    };
-
-    Some(Input {
+    Input {
         monthly_compound,
-        yearly_avg,
+        yearly_roi,
         deadline,
-    })
+        drops,
+    }
 }
 
-fn print_usage(program: &String) {
-    println!("USAGE");
-    println!("{program} <monthly_compound> <yearly_avg> <deadline> [save]");
-    println!("ARGS");
-    println!("monthly_compound -> amount of money you want to compound each month");
-    println!("yearly_avg -> Yearly average return of the underlying stock");
-    println!("deadline -> Amount of years you want to keep the position");
-    println!("save -> Save output to file");
+fn read_float(prompt: &str) -> f64 {
+    loop {
+        let input = read_input(prompt);
+        match input.trim().parse::<f64>() {
+            Ok(value) => break value,
+            Err(_) => println!("ERROR: Not a valid float. Please try again."),
+        }
+    }
+}
+
+fn read_unsigned_int(prompt: &str) -> u64 {
+    loop {
+        let input = read_input(prompt);
+        match input.trim().parse::<u64>() {
+            Ok(value) => break value,
+            Err(_) => println!("ERROR: Not a valid unsigned integer. Please try again."),
+        }
+    }
+}
+
+fn confirm(prompt: &str) -> bool {
+    let input = read_input(prompt);
+    input.trim().eq_ignore_ascii_case("y")
+}
+
+fn read_input(prompt: &str) -> String {
+    let mut buffer = String::new();
+    println!("{}", prompt);
+    stdin()
+        .read_line(&mut buffer)
+        .expect("ERROR: Failed to read from stdin");
+    buffer
+}
+
+fn parse_drops() -> Vec<Drop> {
+    let mut drops = Vec::new();
+
+    loop {
+        let option = read_input(
+            "Select an option:\n1. Small dips ~ 5%\n2. Correction ~ 15%\n3. Recession ~ 40%\n4. Exit",
+        );
+
+        let count = match option.trim() {
+            "1" | "2" | "3" => read_unsigned_int("How many?"),
+            "4" => break,
+            _ => {
+                println!("Invalid option. Please try again.");
+                continue;
+            }
+        };
+
+        let percentage = match option.trim() {
+            "1" => 0.05,
+            "2" => 0.15,
+            "3" => 0.40,
+            _ => unreachable!(),
+        };
+
+        drops.push(Drop { percentage, count });
+    }
+
+    drops
 }
 
 fn print_stats(stats: &Stats) {
@@ -103,7 +167,7 @@ fn save_stats(input: &Input, stats: &Stats) {
     let mut file = std::fs::File::create(format!(
         "{compound}-{roi}-{years}.txt",
         compound = input.monthly_compound,
-        roi = input.yearly_avg,
+        roi = input.yearly_roi,
         years = input.deadline
     ))
     .expect("ERROR: Unable to create output file");
@@ -132,23 +196,19 @@ fn save_stats(input: &Input, stats: &Stats) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let program = args
-        .first()
-        .expect("ERROR: Program name should always exist");
-    if args.len() < 4 {
-        print_usage(program);
-        return;
-    }
+    let input = parse_args();
+    let stats = calc_stats(&input);
 
-    if let Some(input) = parse_args(&args) {
-        let stats = calc_stats(&input);
-        if args.get(4).is_some() {
-            save_stats(&input, &stats);
-        } else {
-            print_stats(&stats);
-        }
+    let mut buffer = String::new();
+
+    println!("Do you want to save to file? y/n");
+    stdin()
+        .read_line(&mut buffer)
+        .expect("ERROR: Failed to read from stdin");
+
+    if buffer.trim().eq_ignore_ascii_case("y") {
+        save_stats(&input, &stats);
     } else {
-        print_usage(program);
+        print_stats(&stats);
     }
 }
