@@ -1,1 +1,6 @@
-# invest-rs
+# compound-rs
+
+## Usage
+```console
+$ cargo run
+```
